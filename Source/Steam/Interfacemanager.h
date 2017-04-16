@@ -42,7 +42,7 @@ enum eInterfaceType
 struct Interfacemanager
 {
     static void Initialize();
-    static void *Fetchinterface(const char *Name);
-    static void *Fetchinterface(eInterfaceType Type);
-    static void Addinterface(eInterfaceType Type, const char *Name, void *Interface);
+    static void *Fetchinterface(std::string Name);
+	static void *Fetchinterface(eInterfaceType Type);
+    static void Addinterface(eInterfaceType Type, std::string Name, void *Interface);
 };

@@ -6,28 +6,25 @@
 
 #include "Steam.h"
 #include <unordered_map>
+#include <map>
 #include "Interfaces/All.h"
 #include "Interfacemanager.h"
 
 constexpr const char *Steamdllname = sizeof(size_t) == sizeof(uint64_t) ? "steam_api64.dll" : "steam_api.dll";
 
 // The interfaces we support.
-std::vector<std::pair<eInterfaceType /* Type */, void * /* Interface */>> Interfacestore;
+std::unordered_map<std::string, eInterfaceType> Interfacestore;
 std::unordered_map<eInterfaceType /* Type */, void * /* Interface */> Interfacemap;
 std::unordered_map<std::string /* Name */, void * /* Interface */> Interfacenames;
 
-void Setmapbyname(eInterfaceType Type, const char *Name)
+void Setmapbyname(eInterfaceType Type, std::string Name)
 {
     Interfacemap[Type] = Interfacemanager::Fetchinterface(Name);
 }
+
 void Scanfile(std::FILE *Filehandle)
 {
-    /*
-        TODO(Convery):
-        Implement a less stupid way of doing this.
-        Preferably not at 5am.
-    */
-
+ 
     std::vector<std::string> Scanwords = 
     {
         "STEAMAPPS_INTERFACE_VERSION0",
@@ -45,7 +42,7 @@ void Scanfile(std::FILE *Filehandle)
         "SteamNetworking0",
         "SteamUtils0",
     };
-    std::vector<std::pair<std::string, std::string>> Replacementwords =
+	std::map<std::string, std::string> Replacementwords =
     {
         { "STEAMAPPS_INTERFACE_VERSION0", "SteamApps0"},
         { "STEAMHTTP_INTERFACE_VERSION0", "SteamHTTP0" },
@@ -69,54 +66,35 @@ void Scanfile(std::FILE *Filehandle)
 
         for (auto &Item : Scanwords)
         {
-            if (std::strstr((Buffer.get() + i), Item.c_str()))
-            {
-                for (auto &Replacement : Replacementwords)
-                {
-                    if (std::strstr(Item.c_str(), Replacement.first.c_str()))
-                    {
-                        i += int64_t(Replacement.first.size() - Replacement.second.size());
-                        std::memcpy((Buffer.get() + i), Replacement.second.c_str(), Replacement.second.size());
-                    }
-                }
+			if (std::strstr((Buffer.get() + i), Item.c_str()))
+			{
+				auto interfaceName = Replacementwords.find(Item);
+				if (interfaceName == Replacementwords.end()) {
+					auto it = Interfacestore.find((Buffer.get() + i));
+					if (it != Interfacestore.end()) {
+						Setmapbyname(it->second, (Buffer.get() + i));
+					}
+				}
+				else {
+					std::string b;
 
-                #define BChecktype(Interfacename, Type)             \
-                if(std::strstr((Buffer.get() + i), Interfacename))  \
-                { Setmapbyname(Type, Buffer.get() + i); continue; } \
-
-                // Add by type.
-                BChecktype("SteamUGC0", STEAM_UGC);
-                BChecktype("SteamApps0", STEAM_APPS);
-                BChecktype("SteamUser0", STEAM_USER);
-                BChecktype("SteamHTTP0", STEAM_HTTP);
-                BChecktype("SteamMusic0", STEAM_MUSIC);
-                BChecktype("SteamVideo0", STEAM_VIDEO);
-                BChecktype("SteamClient0", STEAM_CLIENT);
-                BChecktype("SteamUtilities0", STEAM_UTILS);
-                BChecktype("SteamFriends0", STEAM_FRIENDS);
-                BChecktype("SteamApplist0", STEAM_APPLIST);
-                BChecktype("SteamInventory0", STEAM_INVENTORY);
-                BChecktype("SteamUserstats0", STEAM_USERSTATS);
-                BChecktype("SteamController0", STEAM_CONTROLLER);
-                BChecktype("SteamGameserver0", STEAM_GAMESERVER);
-                BChecktype("SteamNetworking0", STEAM_NETWORKING);
-                BChecktype("SteamHTMLSurface0", STEAM_HTMLSURFACE);
-                BChecktype("SteamMusicremote0", STEAM_MUSICREMOTE);
-                BChecktype("SteamScreenshots0", STEAM_SCREENSHOTS);
-                BChecktype("SteamMatchmaking0", STEAM_MATCHMAKING);
-                BChecktype("SteamRemotestorage0", STEAM_REMOTESTORAGE);
-                BChecktype("SteamContentServer0", STEAM_CONTENTSERVER);
-                BChecktype("SteamUnifiedmessages0", STEAM_UNIFIEDMESSAGES);
-                BChecktype("SteamGameserverStats0", STEAM_GAMESERVERSTATS);
-                BChecktype("SteamMatchamkingservers0", STEAM_MATCHMAKINGSERVERS);
-                BChecktype("SteamMasterserverUpdater0", STEAM_MASTERSERVERUPDATER);
+					b.append( interfaceName->second.c_str() );
+					b.append( Buffer.get() + i + interfaceName->first.size() );
+	
+					auto it = Interfacestore.find(b);
+					if (it != Interfacestore.end()) {
+						Setmapbyname(it->second, b);
+					}
+				}
             }
         }
     }
 }
+
 void Interfacemanager::Initialize()
 {
     // Check for a cache file.
+	//TODO: when do we even initialize this?
     {
         const char *Cachename = "./Plugins/Platformwrapper/Steam_Interfacecache";
         std::FILE *Filehandle = std::fopen(Cachename, "rt");
@@ -161,11 +139,12 @@ void Interfacemanager::Initialize()
             return;
         }
     }
-
-    // Check for a backup file, in the case of devs compiling as a steam_api replacement.
+    
     {
+		// Check for a backup file, in the case of devs compiling as a steam_api replacement.
         std::string Backupname = std::string(Steamdllname) + ".bak";
         std::FILE *Filehandle = std::fopen(Backupname.c_str(), "rb");
+		// Try to open main steam_api.dll
         if(!Filehandle) Filehandle = std::fopen(Steamdllname, "rb");
         if (!Filehandle)
         {
@@ -178,32 +157,27 @@ void Interfacemanager::Initialize()
         std::fclose(Filehandle);
     }
 }
-void *Interfacemanager::Fetchinterface(const char *Name)
+void *Interfacemanager::Fetchinterface(std::string Name)
 {
     auto Result = Interfacenames.find(Name);
     if (Result != Interfacenames.end()) return Result->second;
 
-    DebugPrint(va("%s had no interface with the name \"%s\"", __FUNCTION__, Name).c_str());
+    DebugPrint(va("%s had no interface with the name \"%s\"", __FUNCTION__, Name.c_str()).c_str());
     return nullptr;
 }
+
 void *Interfacemanager::Fetchinterface(eInterfaceType Type)
 {
-    // Return the interface by name if available.
-    auto Result = Interfacemap.find(Type);
-    if (Result != Interfacemap.end()) return Result->second;
+	// Return the interface by name if available.
+	auto Result = Interfacemap.find(Type);
+	if (Result != Interfacemap.end()) return Result->second;
 
-    // Search through the created interfaces to find the latest version as a fallback.
-    for (auto Iterator = Interfacestore.rbegin(); Iterator != Interfacestore.rend(); Iterator++)
-    {
-        if (Iterator->first == Type)
-            return Iterator->second;
-    }
-
-    DebugPrint(va("%s had no interface for the type %i", __FUNCTION__, Type).c_str());
-    return nullptr;
+	DebugPrint(va("%s had no interface for the type %i", __FUNCTION__, Type).c_str());
+	return nullptr;
 }
-void Interfacemanager::Addinterface(eInterfaceType Type, const char *Name, void *Interface)
+
+void Interfacemanager::Addinterface(eInterfaceType Type, std::string Name, void *Interface)
 {
-    Interfacestore.push_back({ Type, Interface });
+	Interfacestore[Name] = Type;
     Interfacenames[Name] = Interface;
 }
